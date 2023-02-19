@@ -1,0 +1,108 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Continuous Delivery pipeline for static website'
+Parameters:
+  GitHubOwner:
+    Description: 'The owner of the GitHub repository.'
+    Type: String
+  GitHubOAuthToken:
+    Description: 'The OAuthToken of the GitHub user.'
+    Type: String
+  GitHubRepo:
+    Description: 'The GitHub repository.'
+    Type: String
+  StackName:
+    Description: 'Provide The stack name'
+    Type: String
+
+Resources:
+  ArtifactStore:
+    Type: "AWS::S3::Bucket"
+    Properties: 
+      VersioningConfiguration:
+        Status: Enabled
+  AWSECSGOCodePipelineIAMRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - 'codepipeline.amazonaws.com'
+          Action:
+          - 'sts:AssumeRole'
+      Path: '/'
+      Policies:
+      - PolicyName: logs
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Action:
+            - s3:*
+            Resource: "*"
+            Effect: Allow
+          - Action:
+            - s3:*
+            Resource:
+            - arn:aws:s3:::codepipeline*
+            - arn:aws:s3:::elasticbeanstalk*
+            Effect: Allow
+          - Action:
+            - codecommit:CancelUploadArchive
+            - codecommit:GetBranch
+            - codecommit:GetCommit
+            - codecommit:GetUploadArchiveStatus
+            - codecommit:UploadArchive
+            Resource: "*"
+            Effect: Allow
+          - Action:
+            - cloudformation:*
+            Resource: "*"
+            Effect: Allow
+
+  CodePipeline:
+    Type: "AWS::CodePipeline::Pipeline"
+    Properties:
+      ArtifactStore:
+        Location: !Ref ArtifactStore
+        Type: S3
+      RoleArn: !Sub '${AWSECSGOCodePipelineIAMRole.Arn}'
+      Stages:
+        - Name: Source
+          Actions: 
+          - Name: Source
+            ActionTypeId:
+              Category: Source 
+              Owner: ThirdParty 
+              Version: 1 
+              Provider: GitHub
+            OutputArtifacts:
+            - Name: staticwebsite
+            Configuration:
+              Owner: !Ref GitHubOwner
+              Repo: !Ref GitHubRepo
+              Branch: main
+              OAuthToken: !Ref GitHubOAuthToken
+        - Name: Deploy
+          Actions:
+          - Name: ExecuteChangeSet
+            ActionTypeId:
+              Category: Deploy
+              Owner: AWS
+              Provider: CloudFormation
+              Version: '1'
+            RunOrder: 2
+            Configuration:
+              ActionMode: CHANGE_SET_EXECUTE
+              Capabilities: CAPABILITY_NAMED_IAM,CAPABILITY_AUTO_EXPAND
+              ChangeSetName: pipeline-changeset
+              ParameterOverrides: '{"ProjectId": "my-project","CodeDeployRole": "CodeDeploy_Role_ARN"}'
+              RoleArn: !Sub '${AWSECSGOCodePipelineIAMRole.Arn}'
+              StackName: !Ref StackName
+              TemplateConfiguration: 'staticwebsite:config.json'
+              TemplatePath: 'staticwebsite::template.yml'
+            OutputArtifacts: []
+            InputArtifacts:
+              - Name: staticwebsite
